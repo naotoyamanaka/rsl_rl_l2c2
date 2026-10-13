@@ -7,10 +7,13 @@
 
 from .rnd import RandomNetworkDistillation, resolve_rnd_config
 from .symmetry import Symmetry, resolve_symmetry_config
+from .l2c2 import L2C2, resolve_l2c2_config
 
 __all__ = [
     "RandomNetworkDistillation",
     "Symmetry",
+    "L2C2",
     "resolve_rnd_config",
     "resolve_symmetry_config",
+    "resolve_l2c2_config",
 ]

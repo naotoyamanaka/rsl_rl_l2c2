@@ -12,7 +12,7 @@ from itertools import chain
 from tensordict import TensorDict
 
 from rsl_rl.env import VecEnv
-from rsl_rl.extensions import RandomNetworkDistillation, Symmetry, resolve_rnd_config, resolve_symmetry_config
+from rsl_rl.extensions import RandomNetworkDistillation, Symmetry, L2C2, resolve_rnd_config, resolve_symmetry_config, resolve_l2c2_config
 from rsl_rl.models import MLPModel
 from rsl_rl.storage import RolloutStorage
 from rsl_rl.utils import (
@@ -62,6 +62,8 @@ class PPO:
         rnd_cfg: dict | None = None,
         # Symmetry parameters
         symmetry_cfg: dict | None = None,
+        # L2C2 parameters
+        l2c2_cfg: dict | None = None,
         # Distributed training parameters
         multi_gpu_cfg: dict | None = None,
         grad_reduce_bucket_mb: float = 25,
@@ -87,6 +89,9 @@ class PPO:
         if symmetry_cfg is not None and (actor.is_recurrent or critic.is_recurrent):
             raise ValueError("Symmetry augmentation is not supported for recurrent policies.")
         self.symmetry = Symmetry(**symmetry_cfg) if symmetry_cfg else None
+
+        # L2C2 extension
+        self.l2c2 = L2C2(**l2c2_cfg) if l2c2_cfg else None
 
         # PPO components
         self.actor = actor.to(self.device)
@@ -142,6 +147,8 @@ class PPO:
         # Note: We clone here because later on we bootstrap the rewards based on timeouts
         self.transition.rewards = rewards.clone()
         self.transition.dones = dones
+        # Record the next observations
+        self.transition.next_observations = obs
 
         # Compute the intrinsic rewards and add to extrinsic rewards
         if self.rnd:
@@ -199,6 +206,8 @@ class PPO:
         mean_rnd_loss = 0 if self.rnd else None
         # Symmetry loss
         mean_symmetry_loss = 0 if self.symmetry else None
+        # Symmetry loss
+        mean_l2c2_loss = 0 if self.l2c2 else None
 
         # Get mini-batch generator
         if self.actor.is_recurrent or self.critic.is_recurrent:
@@ -293,6 +302,13 @@ class PPO:
                     if self.symmetry.use_mirror_loss:
                         loss = loss + self.symmetry.mirror_loss_coeff * symmetry_loss
 
+                # L2C2 loss
+                if self.l2c2:
+                    l2c2_loss = self.l2c2.compute_loss(batch.observations, batch.next_observations, batch.dones,
+                                                        self.actor.distribution, self.actor, values, self.critic,
+                                                        batch.masks, batch.hidden_states)
+                    loss = loss + l2c2_loss
+
             # Compute the gradients for PPO
             self.optimizer.zero_grad()
             loss.backward()
@@ -323,6 +339,9 @@ class PPO:
             # Symmetry loss
             if mean_symmetry_loss is not None:
                 mean_symmetry_loss += symmetry_loss.item()
+            # L2C2 loss
+            if mean_l2c2_loss is not None:
+                mean_l2c2_loss += l2c2_loss.item()
 
         # Update the normalizers
         obs = self.storage.observations.flatten(0, 1)
@@ -340,6 +359,8 @@ class PPO:
             mean_rnd_loss /= num_updates
         if mean_symmetry_loss is not None:
             mean_symmetry_loss /= num_updates
+        if mean_l2c2_loss is not None:
+            mean_l2c2_loss /= num_updates
 
         # Construct the loss dictionary
         loss_dict = {
@@ -351,6 +372,8 @@ class PPO:
             loss_dict["rnd"] = mean_rnd_loss
         if self.symmetry:
             loss_dict["symmetry"] = mean_symmetry_loss
+        if self.l2c2:
+            loss_dict["l2c2"] = mean_l2c2_loss
 
         # Clear the storage
         self.storage.clear()
@@ -452,6 +475,9 @@ class PPO:
             critic_cfg["cnns"] = actor.cnns
         critic: MLPModel = critic_class(obs, cfg["obs_groups"], "critic", 1, **critic_cfg).to(device)
         print(f"Critic Model: {critic}")
+
+        # Resolve l2c2 config if used
+        alg_cfg = resolve_l2c2_config(alg_cfg, (actor.obs_dim, critic.obs_dim))
 
         # Initialize the storage
         storage = RolloutStorage("rl", env.num_envs, cfg["num_steps_per_env"], obs, [env.num_actions], device)
