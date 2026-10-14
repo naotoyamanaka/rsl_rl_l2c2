@@ -47,6 +47,10 @@ class Distribution(nn.Module):
         """
         raise NotImplementedError
 
+    def rsample(self) -> torch.Tensor:
+        """Sample while preserving gradients through the distribution parameters."""
+        raise NotImplementedError
+
     def deterministic_output(self, mlp_output: torch.Tensor) -> torch.Tensor:
         """Extract the deterministic (mean) output from the raw MLP output.
 
@@ -193,6 +197,10 @@ class GaussianDistribution(Distribution):
     def sample(self) -> torch.Tensor:
         """Sample from the Gaussian distribution."""
         return self._distribution.sample()  # type: ignore
+
+    def rsample(self) -> torch.Tensor:
+        """Draw a reparameterized sample from the Gaussian distribution."""
+        return self._distribution.rsample()  # type: ignore
 
     def deterministic_output(self, mlp_output: torch.Tensor) -> torch.Tensor:
         """Extract the mean from the MLP output."""
@@ -371,6 +379,10 @@ class BetaDistribution(Distribution):
     def sample(self) -> torch.Tensor:
         """Sample from the Beta distribution and rescale to ``action_range``."""
         return self._distribution.sample() * self._range_scale + self._range_offset  # type: ignore
+
+    def rsample(self) -> torch.Tensor:
+        """Draw a reparameterized Beta sample and rescale to ``action_range``."""
+        return self._distribution.rsample() * self._range_scale + self._range_offset  # type: ignore
 
     def deterministic_output(self, mlp_output: torch.Tensor) -> torch.Tensor:
         """Extract the mean from the MLP output and rescale to ``action_range``."""

@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 
 import torch
@@ -43,7 +44,7 @@ class L2C2:
         """
         # l2c2 parameters
         self.eps = lambdas[0] / (lambdas[1] - lambdas[0])
-        self.lambda = lambdas[1] * self.eps
+        self.coeff = lambdas[1] * self.eps
         m_ = math.exp(0.5 * (math.log(lambdas[0]) + math.log(lambdas[1])))
         self.power_actor = obs_dims[0] * (1.0 - lambdas[1] * self.eps / m_)
         self.power_critic = obs_dims[1] * (1.0 - lambdas[1] * self.eps / m_)
@@ -73,11 +74,13 @@ class L2C2:
         norm = torch.cat([v_.abs() for v_ in noise.to_dict().values()], dim=-1).amax(dim=-1)
         local_observations = observations + self.scale_local_space * (next_observations - observations) * noise
         #
+        # Preserve the current evaluation state before the actor updates its distribution wrapper.
+        policies = copy.copy(policies)
         actor(local_observations, masks=masks, hidden_state=hidden_states[0], stochastic_output=True)
         local_policies = actor.distribution
         a_ = local_policies.rsample()
-        logq = policies.log_prob(a_).sum(dim=-1)
-        logp = local_policies.log_prob(a_).sum(dim=-1)
+        logq = policies.log_prob(a_)
+        logp = local_policies.log_prob(a_)
         #
         gain_actor = self.coeff / (norm ** self.power_actor + self.eps)
         loss_actor = gain_actor * (- logq + logp + (logq - logp).exp() - 1.0)
